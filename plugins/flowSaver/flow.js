@@ -119,27 +119,29 @@ const is5min = (start, end) => {
   return true;
 };
 
-const child = appFork('plugins/flowSaver/flowChildProcess');
-// child.setMaxListeners(200);
-const splitTimePromises = {};
-const sumFlowPromises = {};
-child.on('message', msg => {
-  if(msg[0] === 'splitTime') {
-    splitTimePromises[msg[1]](msg[2]);
-    delete splitTimePromises[msg[1]];
-  } else if(msg[0] === 'sumFlow') {
-    sumFlowPromises[msg[1]](msg[2]);
-    delete sumFlowPromises[msg[1]];
-  }
-});
+// const child = appFork('plugins/flowSaver/flowChildProcess');
+// // child.setMaxListeners(200);
+// const splitTimePromises = {};
+// const sumFlowPromises = {};
+// child.on('message', msg => {
+//   if(msg[0] === 'splitTime') {
+//     splitTimePromises[msg[1]](msg[2]);
+//     delete splitTimePromises[msg[1]];
+//   } else if(msg[0] === 'sumFlow') {
+//     sumFlowPromises[msg[1]](msg[2]);
+//     delete sumFlowPromises[msg[1]];
+//   }
+// });
+
+// const splitTime = async (start, end) => {
+//   const random = Math.random().toString().substr(2);
+//   return new Promise((resolve, reject) => {
+//     splitTimePromises[random] = resolve;
+//     child.send(['splitTime', random, start, end]);
+//   });
+// };
 
 const splitTime = async (start, end) => {
-  const random = Math.random().toString().substr(2);
-  return new Promise((resolve, reject) => {
-    splitTimePromises[random] = resolve;
-    child.send(['splitTime', random, start, end]);
-  });
-  
   const time = {
     day: [],
     hour: [],
@@ -195,7 +197,7 @@ const splitTime = async (start, end) => {
   };
   let timeStart = start;
   let timeEnd = end;
-  let last;
+  let last = 'origin';
   while(timeStart < timeEnd) {
     if(isDay(timeStart) && next(timeStart, 'day') <= splitEnd.day && next(timeStart, 'day') <= end) {
       if(last === 'day' && time.day.length) {
@@ -292,24 +294,18 @@ const getFlowFromSplitTime = async (serverId, accountId, start, end) => {
     sum.push(getFlow('saveFlow', f[0], f[1]));
   });
   const result = await Promise.all(sum);
-  const random = Math.random().toString().substr(2);
-  return new Promise((resolve, reject) => {
-    sumFlowPromises[random] = resolve;
-    child.send(['sumFlow', random, result]);
-  });
+  return result.length ? result.reduce((a, b) => a + b) : 0;
+  // const random = Math.random().toString().substr(2);
+  // return new Promise((resolve, reject) => {
+  //   sumFlowPromises[random] = resolve;
+  //   child.send(['sumFlow', random, result]);
+  // });
 };
 
 const getFlowFromSplitTimeWithScale = async (serverIds, accountId, start, end) => {
   const time = await splitTime(start, end);
   const sum = [];
   const getFlow = (tableName, startTime, endTime) => {
-    // return knex(tableName)
-    // .sum('flow as sumFlow')
-    // .groupBy(['id', 'accountId'])
-    // .select(['id', 'accountId', 'port'])
-    // .whereBetween('time', [startTime, endTime - 1])
-    // .whereIn('id', serverIds)
-    // .andWhere({ accountId });
     const where = {};
     where[`${ tableName }.accountId`] = accountId;
     return knex('server')
@@ -432,8 +428,9 @@ const getServerPortFlowWithScale = async (serverId, accountId, timeArray, isMult
 
 const getlastConnectTime = async (serverId, accountId) => {
   const lastConnectFromSaveFlow = await knex('saveFlow')
-  .select(['time'])
+  .select([ 'time' ])
   .where({ id: serverId, accountId })
+  .where('flow', '>', 100000)
   .orderBy('time', 'desc').limit(1).then(success => {
     if(success[0]) {
       return success[0].time;
@@ -446,6 +443,7 @@ const getlastConnectTime = async (serverId, accountId) => {
   return knex('saveFlow5min')
   .select(['time'])
   .where({ id: serverId, accountId })
+  .where('flow', '>', 100000)
   .orderBy('time', 'desc').limit(1).then(success => {
     if(success[0]) {
       return { lastConnect: success[0].time };

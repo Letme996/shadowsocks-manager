@@ -1,6 +1,8 @@
 const user = appRequire('plugins/user/index');
 const account = appRequire('plugins/account/index');
+const accountPlugin = account;
 const flow = appRequire('plugins/flowSaver/flow');
+const moment = require('moment');
 const knex = appRequire('init/knex').knex;
 const emailPlugin = appRequire('plugins/email/index');
 const orderPlugin = appRequire('plugins/webgui_order');
@@ -11,8 +13,12 @@ const log4js = require('log4js');
 const logger = log4js.getLogger('webgui');
 const ref = appRequire('plugins/webgui_ref/index');
 const refUser = appRequire('plugins/webgui_ref/user');
+const refOrder = appRequire('plugins/webgui_ref/order');
 const crypto = require('crypto');
 const flowPack = appRequire('plugins/webgui_order/flowPack');
+const alipayPlugin = appRequire('plugins/alipay/index');
+const macAccountPlugin = appRequire('plugins/macAccount/index');
+const accountFlow = appRequire('plugins/account/accountFlow');
 
 const alipay = appRequire('plugins/alipay/index');
 
@@ -20,7 +26,7 @@ exports.getAccount = async (req, res) => {
   try {
     const userId = req.session.user;
     const accounts = await account.getAccount({ userId });
-    for(let account of accounts) {
+    for(const account of accounts) {
       account.data = JSON.parse(account.data);
       if (account.type >= 2 && account.type <= 5) {
         const time = {
@@ -39,8 +45,63 @@ exports.getAccount = async (req, res) => {
         account.data.flowPack = await flowPack.getFlowPack(account.id, account.data.from, account.data.to);
       }
       account.server = account.server ? JSON.parse(account.server) : account.server;
+      account.publicKey = '';
+      account.privateKey = '';
+      if(account.key) {
+        if(account.key.includes(':')) {
+          account.publicKey = account.key.split(':')[0];
+          account.privateKey = account.key.split(':')[1];
+        } else {
+          account.publicKey = account.key;
+        }
+      }
+      await accountFlow.edit(account.id);
+
+      const onlines = await accountPlugin.getOnlineAccount();
+      const serversWithoutWireGuard = await knex('server').select(['id']).where({ type: 'Shadowsocks' }).then(s => s.map(m => m.id));
+      account.idle = serversWithoutWireGuard.filter(server => {
+        if(account.server) {
+          return account.server.includes(server);
+        }
+        return true;
+      }).sort((a, b) => {
+        return (onlines[a] || 0)  - (onlines[b] || 0);
+      })[0];
     }
     res.send(accounts);
+  } catch (err) {
+    console.log(err);
+    res.status(403).end();
+  }
+};
+
+exports.getAccountUsage = async (req, res) => {
+  try {
+    const userId = req.session.user;
+    const accounts = await account.getAccount({ userId });
+    const servers = await knex('server').where({}).then(s => s.map(m => m.id));
+    const day = [
+      moment().hour(0).minute(0).second(0).millisecond(0).toDate().valueOf(),
+      moment().hour(24).minute(0).second(0).millisecond(0).toDate().valueOf(),
+    ];
+    const week = [
+      moment().day(0).hour(0).minute(0).second(0).millisecond(0).toDate().valueOf(),
+      moment().day(7).hour(0).minute(0).second(0).millisecond(0).toDate().valueOf(),
+    ];
+    const month = [
+      moment().date(0).hour(0).minute(0).second(0).millisecond(0).toDate().valueOf(),
+      moment().date(31).hour(0).minute(0).second(0).millisecond(0).toDate().valueOf(),
+    ];
+    const dayFlow = await Promise.all(accounts.map(m => {
+      return flow.getServerPortFlowWithScale(null, m.id, day, true).then(s => s[0]);
+    })).then(s => s.reduce((a, b) => a + b, 0));
+    const weekFlow = await Promise.all(accounts.map(m => {
+      return flow.getServerPortFlowWithScale(null, m.id, week, true).then(s => s[0]);
+    })).then(s => s.reduce((a, b) => a + b, 0));
+    const monthFlow = await Promise.all(accounts.map(m => {
+      return flow.getServerPortFlowWithScale(null, m.id, month, true).then(s => s[0]);
+    })).then(s => s.reduce((a, b) => a + b, 0));
+    res.send([dayFlow, weekFlow, monthFlow]);
   } catch (err) {
     console.log(err);
     res.status(403).end();
@@ -91,7 +152,7 @@ exports.getServers = (req, res) => {
     });
   };
   let servers;
-  knex('server').select(['id', 'host', 'name', 'method', 'scale', 'comment', 'shift']).orderBy('name')
+  knex('server').select(['id', 'type' ,'host', 'name', 'method', 'scale', 'comment', 'shift', 'key', 'net', 'wgPort']).orderBy('name')
     .then(success => {
       servers = serverAliasFilter(success);
       return account.getAccount({
@@ -295,15 +356,21 @@ exports.getPrice = async (req, res) => {
 exports.getNotice = async (req, res) => {
   try {
     const userId = req.session.user;
-    const groupInfo = await knex('user').select([
-      'group.id as id',
-      'group.showNotice as showNotice',
-    ]).innerJoin('group', 'user.group', 'group.id').where({
-      'user.id': userId,
-    }).then(s => s[0]);
-    const group = [groupInfo.id];
-    if(groupInfo.showNotice) { group.push(-1); }
-    const notices = await knex('notice').select().whereIn('group', group).orderBy('time', 'desc');
+    const noticesWithoutGroup = await knex('notice').where({ group: 0 });
+    const noticesWithGroup = await knex('notice').select([
+      'notice.id as id',
+      'notice.title as title',
+      'notice.content as content',
+      'notice.time as time',
+      'notice.group as group',
+      'notice.autopop as autopop',
+    ])
+    .innerJoin('notice_group', 'notice.id', 'notice_group.noticeId')
+    .innerJoin('user', 'user.group', 'notice_group.groupId')
+    .where('notice.group', '>', 0)
+    .where({ 'user.id': userId })
+    .groupBy('notice.id');
+    const notices = [...noticesWithoutGroup, ...noticesWithGroup ].sort((a, b) => b.time - a.time);
     return res.send(notices);
   } catch (err) {
     console.log(err);
@@ -597,6 +664,62 @@ exports.activeAccount = async (req, res) => {
     const accountInfo = await account.getAccount({ id: accountId, userId }).then(s => s[0]);
     if(!accountInfo) { return Promise.reject('account not found'); }
     await account.activeAccount(accountInfo.id);
+    res.send('success');
+  } catch(err) {
+    console.log(err);
+    res.status(403).end();
+  }
+};
+
+exports.getOrder = async (req, res) => {
+  try {
+    const userId = req.session.user;
+    let orders = [];
+
+    if(config.plugins.alipay && config.plugins.alipay.use) {
+      const alipayOrders = await alipayPlugin.getUserFinishOrder(userId);
+      orders = [...orders, ...alipayOrders];
+    }
+
+    if(config.plugins.paypal && config.plugins.paypal.use) {
+      const paypalOrders = await paypal.getUserFinishOrder(userId);
+      orders = [...orders, ...paypalOrders];
+    }
+
+    const refOrders = await refOrder.getUserFinishOrder(userId);
+    orders = [...orders, ...refOrders];
+
+    if(config.plugins.giftcard && config.plugins.giftcard.use) {
+      const giftCardOrders = await giftcard.getUserFinishOrder(userId);
+      orders = [...orders, ...giftCardOrders];
+    }
+
+    orders = orders.sort((a, b) => {
+      return b.createTime - a.createTime;
+    });
+    res.send(orders);
+  } catch(err) {
+    console.log(err);
+    res.status(403).end();
+  }
+};
+
+exports.getMacAccount = async (req, res) => {
+  try {
+    const userId = req.session.user;
+    const accounts = await macAccountPlugin.getAccountByUserId(userId);
+    res.send(accounts);
+  } catch(err) {
+    console.log(err);
+    res.status(403).end();
+  }
+};
+
+exports.addMacAccount = async (req, res) => {
+  try {
+    const userId = req.session.user;
+    const { mac } = req.body;
+    await macAccountPlugin.userAddMacAccount(userId, mac);
     res.send('success');
   } catch(err) {
     console.log(err);

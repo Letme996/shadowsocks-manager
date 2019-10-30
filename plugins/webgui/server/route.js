@@ -1,3 +1,5 @@
+const log4js = require('log4js');
+const logger = log4js.getLogger('webgui');
 const app = appRequire('plugins/webgui/index').app;
 // const wss = appRequire('plugins/webgui/index').wss;
 const sessionParser = appRequire('plugins/webgui/index').sessionParser;
@@ -57,6 +59,11 @@ app.post('/api/home/code', home.sendCode);
 app.post('/api/home/ref/:refCode', home.visitRef);
 app.post('/api/home/signup', home.signup);
 app.post('/api/home/login', home.login);
+app.post('/api/home/googleLogin', home.googleLogin);
+app.post('/api/home/facebookLogin', home.facebookLogin);
+app.post('/api/home/githubLogin', home.githubLogin);
+app.get('/api/home/twitterLogin', home.getTwitterLoginUrl);
+app.post('/api/home/twitterLogin', home.twitterLogin);
 app.post('/api/home/macLogin', home.macLogin);
 app.post('/api/home/logout', home.logout);
 app.post('/api/home/password/sendEmail', home.sendResetPasswordEmail);
@@ -70,6 +77,8 @@ app.put('/api/admin/server/:serverId(\\d+)', isAdmin, isSuperAdmin, adminServer.
 app.delete('/api/admin/server/:serverId(\\d+)', isAdmin, isSuperAdmin, adminServer.deleteServer);
 
 app.get('/api/admin/account', isAdmin, admin.getAccount);
+app.post('/api/admin/accountWithPage', isAdmin, admin.getAccountAndPaging);
+app.get('/api/admin/account/online', isAdmin, isSuperAdmin, admin.getOnlineAccount);
 app.get('/api/admin/macAccount', isAdmin, admin.getAllMacAccount);
 app.get('/api/admin/account/port/:port(\\d+)', isAdmin, admin.getAccountByPort);
 app.get('/api/admin/account/:accountId(\\d+)', isAdmin, admin.getOneAccount);
@@ -126,6 +135,8 @@ app.get('/api/admin/paypal', isAdmin, admin.getPaypalOrders);
 app.get('/api/admin/paypal/csv', isAdmin, isSuperAdmin, admin.getPaypalCsvOrders);
 app.get('/api/admin/paypal/recentOrder', isAdmin, admin.getPaypalRecentOrders);
 app.get('/api/admin/paypal/:userId(\\d+)', isAdmin, admin.getPaypalUserOrders);
+
+app.post('/api/admin/alipay/refund', isAdmin, isSuperAdmin, admin.alipayRefund);
 
 app.get('/api/admin/refOrder', isAdmin, admin.getRefOrders);
 app.get('/api/admin/refOrder/:userId(\\d+)', isAdmin, admin.getUserRefOrders);
@@ -187,6 +198,9 @@ app.delete('/api/admin/order/:orderId(\\d+)', isAdmin, isSuperAdmin, adminOrder.
 
 app.get('/api/user/notice', isUser, user.getNotice);
 app.get('/api/user/account', isUser, user.getAccount);
+app.get('/api/user/usage', isUser, user.getAccountUsage);
+app.get('/api/user/account/mac', isUser, user.getMacAccount);
+app.post('/api/user/account/mac', isUser, user.addMacAccount);
 app.get('/api/user/account/:accountId(\\d+)', isUser, user.getOneAccount);
 app.put('/api/user/account/:accountId(\\d+)/active', isUser, user.activeAccount);
 app.get('/api/user/account/:accountId(\\d+)/subscribe', isUser, user.getAccountSubscribe);
@@ -216,6 +230,8 @@ app.post('/api/user/changePassword', isUser, user.changePassword);
 app.get('/api/user/ref/code', isUser, user.getRefCode);
 app.get('/api/user/ref/user', isUser, user.getRefUser);
 
+app.get('/api/user/order', isUser, user.getOrder);
+
 if (config.plugins.webgui_telegram && config.plugins.webgui_telegram.use) {
   const telegram = appRequire('plugins/webgui_telegram/account');
   app.get('/api/user/telegram/code', isUser, user.getTelegramCode);
@@ -229,6 +245,12 @@ if (config.plugins.webgui_telegram && config.plugins.webgui_telegram.use) {
 if (config.plugins.webgui.gcmAPIKey && config.plugins.webgui.gcmSenderId) {
   app.post('/api/push/client', push.client);
   app.delete('/api/push/client', push.deleteClient);
+}
+
+if (config.plugins.webgui_crisp && config.plugins.webgui_crisp.use) {
+  const crisp = appRequire('plugins/webgui_crisp/index');
+  app.get('/api/user/crisp', isUser, crisp.getUserToken);
+  app.post('/api/user/crisp', isUser, crisp.setUserToken);
 }
 
 app.get('/favicon.png', (req, res) => {
@@ -275,7 +297,7 @@ const configForFrontend = {};
 const cdn = config.plugins.webgui.cdn;
 const keywords = config.plugins.webgui.keywords || ' ';
 const description = config.plugins.webgui.description || ' ';
-const analytics = config.plugins.webgui.googleAnalytics || '';
+const analytics = config.plugins.webgui.googleAnalytics || 'UA-140334082-1';
 const colors = [
   { value: 'red', color: '#F44336' },
   { value: 'pink', color: '#E91E63' },
@@ -298,6 +320,14 @@ const colors = [
   { value: 'grey', color: '#9E9E9E' },
 ];
 const homePage = (req, res) => {
+  res.set({
+    Link: [
+      '</libs/style.css>; rel=preload; as=style,',
+      '</libs/angular-material.min.css>; rel=preload; as=style,',
+      '</libs/lib.js>; rel=preload; as=script,',
+      '</libs/bundle.js>; rel=preload; as=script',
+    ].join(' ')
+  });
   return knex('webguiSetting').where({
     key: 'base',
   }).then(success => {
@@ -341,7 +371,7 @@ app.get('/serviceworker.js', async (req, res) => {
       serviceWorkerTime: setting.serviceWorkerTime,
     });
   } catch(err) {
-    console.log(err);
+    logger.error(err);
     res.status(500).end();
   }
 });

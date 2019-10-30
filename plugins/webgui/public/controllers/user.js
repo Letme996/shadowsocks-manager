@@ -1,8 +1,8 @@
 const app = angular.module('app');
 
 app
-.controller('UserController', ['$scope', '$mdMedia', '$mdSidenav', '$state', '$http', '$interval', '$localStorage', 'userApi', 'configManager',
-  ($scope, $mdMedia, $mdSidenav, $state, $http, $interval, $localStorage, userApi, configManager) => {
+.controller('UserController', ['$scope', '$mdMedia', '$mdSidenav', '$state', '$http', '$interval', '$localStorage', 'userApi', 'configManager', '$window',
+  ($scope, $mdMedia, $mdSidenav, $state, $http, $interval, $localStorage, userApi, configManager, $window) => {
     const config = configManager.getConfig();
     if(config.status === 'admin') {
       return $state.go('admin.index');
@@ -44,6 +44,11 @@ app
       icon: 'account_circle',
       click: 'user.account'
     }, {
+      name: '订单',
+      icon: 'attach_money',
+      click: 'user.order',
+      hide: true,
+    }, {
       name: '设置',
       icon: 'settings',
       click: 'user.settings'
@@ -57,6 +62,9 @@ app
           $localStorage.home = {};
           $localStorage.user = {};
           configManager.deleteConfig();
+          if(config.crisp) {
+            $crisp.push(['do', 'session:reset', [false]]);
+          }
           $state.go('home.index');
         });
       },
@@ -69,6 +77,12 @@ app
         $state.go($scope.menus[index].click);
       }
     };
+
+    $http.get('/api/user/order').then(success => {
+      if(success.data.length) {
+        $scope.menus[2].hide = false;
+      };
+    });
 
     $scope.menuButtonIcon = '';
     $scope.menuButtonClick = () => {};
@@ -118,13 +132,61 @@ app
         };
       });
     };
+    document.addEventListener('crispReady', function (e) {
+      $crisp.push(['set', 'session:data', [[['user-type', 'ssmgr-user']]]]);
+      $crisp.push(['set', 'session:data', [[['user-agent', navigator.userAgent]]]]);
+      $crisp.push(['on', 'message:received', () => {
+        $crisp.push(['do', 'chat:open']);
+        $crisp.push(['do', 'chat:show']);
+      }]);
+      if(!$scope.crispToken) {
+        $scope.crispToken = $crisp.get('session:identifier');
+        $http.post('/api/user/crisp', { token: $scope.crispToken });
+      }
+    }, false);
+    const startCrisp = () => {
+      $crisp.push(['do', 'chat:hide']);
+      $crisp.push(['on', 'chat:closed', () => {
+        $crisp.push(['do', 'chat:hide']);
+      }]);
+      (function() {
+        d = document;
+        s = d.createElement('script');
+        s.src = 'https://client.crisp.chat/l.js';
+        s.async = 1;
+        d.getElementsByTagName('head')[0].appendChild(s);
+      })();
+    };
+    if(config.crisp) {
+      $http.get('/api/user/crisp').then(success => {
+        $scope.crispToken = success.data.token;
+        $crisp.push(['set', 'user:email', config.email]);
+        if(!$scope.crispToken) {
+          startCrisp();
+        } else {
+          window.CRISP_TOKEN_ID = $scope.crispToken;
+          startCrisp();
+        }
+      });
+    }
   }
 ])
-.controller('UserIndexController', ['$scope', '$state', 'userApi', 'markdownDialog',
-  ($scope, $state, userApi, markdownDialog) => {
+.controller('UserIndexController', ['$scope', '$state', 'userApi', 'markdownDialog', '$sessionStorage', 'autopopDialog',
+  ($scope, $state, userApi, markdownDialog, $sessionStorage, autopopDialog) => {
     $scope.setTitle('首页');
+    $scope.notices = [];
     userApi.getNotice().then(success => {
       $scope.notices = success;
+      if(!$sessionStorage.showNotice) {
+        $sessionStorage.showNotice = true;
+        const autopopNotice = $scope.notices.filter(notice => notice.autopop);
+        if(autopopNotice.length) {
+          autopopDialog.show(autopopNotice);
+        }
+      }
+    });
+    userApi.getUsage().then(success => {
+      $scope.usage = success;
     });
     $scope.toMyAccount = () => {
       $state.go('user.account');
@@ -135,13 +197,20 @@ app
     $scope.toTelegram = () => {
       $state.go('user.telegram');
     };
+    $scope.toNotice = () => {
+      $state.go('user.notice');
+    };
     $scope.toRef = () => {
       $state.go('user.ref');
     };
+    $scope.toCrisp = () => {
+      $crisp.push(['do', 'chat:open']);
+      $crisp.push(['do', 'chat:show']);
+    };
   }
 ])
-.controller('UserAccountController', ['$scope', '$http', '$mdMedia', 'userApi', 'alertDialog', 'payDialog', 'qrcodeDialog', '$interval', '$localStorage', 'changePasswordDialog', 'payByGiftCardDialog', 'subscribeDialog', '$q', '$state',
-  ($scope, $http, $mdMedia, userApi, alertDialog, payDialog, qrcodeDialog, $interval, $localStorage, changePasswordDialog, payByGiftCardDialog, subscribeDialog, $q, $state) => {
+.controller('UserAccountController', ['$scope', '$http', '$mdMedia', 'userApi', '$filter', 'payDialog', 'qrcodeDialog', '$interval', '$localStorage', 'changePasswordDialog', 'payByGiftCardDialog', 'subscribeDialog', '$q', '$state', 'wireGuardConfigDialog',
+  ($scope, $http, $mdMedia, userApi, $filter, payDialog, qrcodeDialog, $interval, $localStorage, changePasswordDialog, payByGiftCardDialog, subscribeDialog, $q, $state, wireGuardConfigDialog) => {
     $scope.setTitle('账号');
     $scope.setFabButton($scope.config.multiAccount ? () => {
       $scope.createOrder();
@@ -174,9 +243,10 @@ app
     };
     setAccountServerList($scope.account, $scope.servers);
 
-    const getUserAccountInfo = () => {
+    const getUserAccountInfo = (first) => {
       userApi.getUserAccount().then(success => {
         $scope.servers = success.servers;
+        let setDefaultTab = false;
         if(success.account.map(m => m.id).join('') === $scope.account.map(m => m.id).join('')) {
           success.account.forEach((a, index) => {
             $scope.account[index].data = a.data;
@@ -194,8 +264,15 @@ app
             })[0].id;
             $scope.getServerPortData(f, serverId);
           });
+          setDefaultTab = true;
         }
         setAccountServerList($scope.account, $scope.servers);
+        if(setDefaultTab) {
+          $scope.account.forEach(f => {
+            f.defaultTab = f.serverList.findIndex(e => e.id === f.idle);
+            if(f.defaultTab < 0) { f.defaultTab = 0; }
+          });
+        }
         $localStorage.user.serverInfo.data = success.servers;
         $localStorage.user.serverInfo.time = Date.now();
         $localStorage.user.accountInfo.data = success.account;
@@ -205,15 +282,32 @@ app
         }
       });
     };
-    getUserAccountInfo();
+    getUserAccountInfo(true);
 
     const base64Encode = str => {
       return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, function(match, p1) {
         return String.fromCharCode('0x' + p1);
       }));
     };
-    $scope.createQrCode = (method, password, host, port, serverName) => {
-      return 'ss://' + base64Encode(method + ':' + password + '@' + host + ':' + port);
+    $scope.createQrCode = (server, account) => {
+      // console.log(server, account);
+      if(!server) { return ''; }
+      if(server.type === 'WireGuard') {
+        const a = account.port % 254;
+        const b = (account.port - a) / 254;
+        return [
+          '[Interface]',
+          `Address = ${ server.net.split('.')[0] }.${ server.net.split('.')[1] }.${ b }.${ a + 1 }/32`,
+          `PrivateKey = ${ account.privateKey }`,
+          'DNS = 8.8.8.8',
+          '[Peer]',
+          `PublicKey = ${ server.key }`,
+          `Endpoint = ${ server.host }:${ server.wgPort }`,
+          `AllowedIPs = 0.0.0.0/0`,
+        ].join('\n');
+      } else {
+        return 'ss://' + base64Encode(server.method + ':' + account.password + '@' + server.host + ':' + (account.port + server.shift));
+      }
     };
 
     $scope.getServerPortData = (account, serverId) => {
@@ -300,9 +394,9 @@ app
         return false;
       }
     };
-    $scope.showQrcodeDialog = (method, password, host, port, serverName) => {
-      const ssAddress = $scope.createQrCode(method, password, host, port, serverName);
-      qrcodeDialog.show(serverName, ssAddress);
+    $scope.showQrcodeDialog = (server, account) => {
+      const ssAddress = $scope.createQrCode(server, account);
+      qrcodeDialog.show(server.name, ssAddress);
     };
     $scope.cycleStyle = account => {
       let percent = 0;
@@ -328,6 +422,15 @@ app
         filter: 'blur(4px)'
       };
     };
+    $scope.clipboardSuccess = event => {
+      $scope.toast($filter('translate')('二维码链接已复制到剪贴板'));
+    };
+    $scope.isWG = server => {
+      return (server && server.type === 'WireGuard');
+    };
+    $scope.showWireGuard = (server, account) => {
+      wireGuardConfigDialog.show(server, account);
+    };
   }
 ])
 .controller('UserSettingsController', ['$scope', '$state',
@@ -341,6 +444,9 @@ app
     };
     $scope.toRef = () => {
       $state.go('user.ref');
+    };
+    $scope.toMac = () => {
+      $state.go('user.macAddress');
     };
   }
 ])
@@ -392,15 +498,66 @@ app
     };
   }
 ])
-.controller('UserRefController', ['$scope', '$http',
-  ($scope, $http) => {
+.controller('UserRefController', ['$scope', '$http', '$filter',
+  ($scope, $http, $filter) => {
     $scope.setTitle('邀请码');
     $scope.setMenuButton('arrow_back', 'user.settings');
     $http.get('/api/user/ref/code').then(success => { $scope.code = success.data; });
     $http.get('/api/user/ref/user').then(success => { $scope.user = success.data; });
     $scope.getRefUrl = code => `${ $scope.config.site }/home/ref/${ code }`;
     $scope.clipboardSuccess = event => {
-      $scope.toast('邀请链接已复制到剪贴板');
+      $scope.toast($filter('translate')('邀请链接已复制到剪贴板'));
     };
   }
-]);
+])
+.controller('UserOrderController', ['$scope', '$http',
+  ($scope, $http) => {
+    $scope.setTitle('我的订单');
+    $http.get('/api/user/order').then(success => {
+      $scope.orders = success.data;
+    });
+  }
+])
+.controller('UserMacAddressController', ['$scope', '$state', '$http', 'addMacAccountDialog',
+  ($scope, $state, $http, addMacAccountDialog) => {
+    $scope.setTitle('MAC地址');
+    $scope.setMenuButton('arrow_back', 'user.settings');
+    const getMacAccount = () => {
+      $http.get('/api/user/account/mac').then(success => {
+        $scope.macAccounts = success.data;
+        if(!$scope.macAccounts.length) {
+          $scope.setFabButton(() => {
+            addMacAccountDialog.show().then(() => {
+              getMacAccount();
+            }).catch(err => {
+              getMacAccount();
+            });
+          });
+        } else {
+          $scope.setFabButton();
+        }
+      });
+    };
+    $scope.addMacAccount = () => {
+      addMacAccountDialog.show().then(() => {
+        getMacAccount();
+      }).catch(err => {
+        getMacAccount();
+      });
+    };
+    getMacAccount();
+  }
+])
+.controller('UserNoticeController', ['$scope', 'userApi', 'markdownDialog',
+  ($scope, userApi, markdownDialog) => {
+    $scope.setTitle('公告');
+    $scope.setMenuButton('arrow_back', 'user.index');
+    userApi.getNotice().then(success => {
+      $scope.notices = success;
+    });
+    $scope.showNotice = notice => {
+      markdownDialog.show(notice.title, notice.content);
+    };
+  }
+])
+;

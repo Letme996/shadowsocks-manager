@@ -178,7 +178,7 @@ cron.minute(async () => {
   for(const order of orders) {
     await scanOrder(order);
   }
-}, 1);
+}, 'CheckPaypalOrder', 1);
 
 const orderList = async (options = {}) => {
   const where = {};
@@ -262,10 +262,30 @@ const orderListAndPaging = async (options = {}) => {
   };
 };
 
+const getUserFinishOrder = async userId => {
+  let orders = await knex('paypal').select([
+    'orderId',
+    'amount',
+    'createTime',
+  ]).where({
+    user: userId,
+  }).orderBy('createTime', 'DESC');
+  orders = orders.map(order => {
+    return {
+      orderId: order.orderId,
+      type: 'Paypal',
+      amount: order.amount,
+      createTime: order.createTime,
+    };
+  });
+  return orders;
+};
+
 exports.orderListAndPaging = orderListAndPaging;
 exports.orderList = orderList;
+exports.getUserFinishOrder = getUserFinishOrder;
 
 cron.minute(() => {
   if(!config.plugins.paypal || !config.plugins.paypal.use) { return; }
   knex('paypal').delete().where({ status: 'created' }).whereBetween('expireTime', [0, Date.now() - 1 * 24 * 3600 * 1000]).then();
-}, 30);
+}, 'DeletePaypalOrder', 30);

@@ -1,4 +1,4 @@
-const ONLINE_CACHE_NAME = '2019-10-27 11:14:35 <%= serviceWorkerTime%>';
+const ONLINE_CACHE_NAME = '2020-01-30 20:22:45 <%= serviceWorkerTime%>';
 const isSWOpen = JSON.parse('<%= serviceWorker%>');
 
 const emptyCacheUrl = [];
@@ -98,11 +98,13 @@ const onlineCacheUrl = [
 
   '/public/views/dialog/addAccount.html',
   '/public/views/dialog/addGiftCardBatch.html',
+  '/public/views/dialog/addMacAccount.html',
   '/public/views/dialog/alert.html',
   '/public/views/dialog/autopop.html',
   '/public/views/dialog/ban.html',
   '/public/views/dialog/changePassword.html',
   '/public/views/dialog/confirm.html',
+  '/public/views/dialog/editUserComment.html',
   '/public/views/dialog/email.html',
   '/public/views/dialog/ip.html',
   '/public/views/dialog/language.html',
@@ -114,6 +116,7 @@ const onlineCacheUrl = [
   '/public/views/dialog/setCurrentAccount.html',
   '/public/views/dialog/setEmail.html',
   '/public/views/dialog/setUserGroup.html',
+  '/public/views/dialog/showWireGuardConfig.html',
   '/public/views/dialog/subscribe.html',
 ];
 

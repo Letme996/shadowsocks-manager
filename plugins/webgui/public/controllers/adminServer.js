@@ -129,7 +129,7 @@ app.controller('AdminServerController', ['$scope', '$http', '$state', 'moment', 
           });
         }
         const { number } = $scope.servers.reduce((a, b) => {
-          return { number: (a.number || 1) + (b.number || 1) };
+          return { number: (a.number >= 0 ? a.number : 1) + (b.number >= 0 ? b.number : 1) };
         }, { number: 0 });
         if($state.current.name !== 'admin.server') { return; }
         if ($scope.servers.length === number) {
@@ -440,8 +440,8 @@ app.controller('AdminServerController', ['$scope', '$http', '$state', 'moment', 
     };
   }
 ])
-.controller('AdminAddServerController', ['$scope', '$state', '$stateParams', '$http', 'alertDialog',
-  ($scope, $state, $stateParams, $http, alertDialog) => {
+.controller('AdminAddServerController', ['$scope', '$state', '$stateParams', '$http', 'alertDialog', '$q',
+  ($scope, $state, $stateParams, $http, alertDialog, $q) => {
     $scope.setTitle('新增服务器');
     $scope.setMenuButton('arrow_back', 'admin.server');
     $scope.methods = [
@@ -474,24 +474,47 @@ app.controller('AdminServerController', ['$scope', '$http', '$state', 'moment', 
       scale: 1,
       shift: 0,
     };
+    $scope.tagsAutoComplete = {
+      searchText: '',
+      selectedItem: '',
+      items: [],
+      querySearch: (query) => {
+        if(!query) { return []; }
+        return $scope.tagsAutoComplete.items.filter(f => (f.includes(query) && !$scope.tags.includes(f)));
+      },
+    };
+    $http.get('/api/admin/tag', {
+      params: {
+        type: 'server',
+      }
+    }).then(success => {
+      $scope.tagsAutoComplete.items = success.data;
+    });
     $scope.confirm = () => {
       alertDialog.loading();
-      $http.post('/api/admin/server', {
-        type: $scope.server.type,
-        name: $scope.server.name,
-        address: $scope.server.address,
-        port: +$scope.server.port,
-        password: $scope.server.password,
-        method: $scope.server.method,
-        comment: $scope.server.comment,
-        scale: $scope.server.scale,
-        shift: $scope.server.shift,
-        key: $scope.server.key,
-        net: $scope.server.net,
-        wgPort: $scope.server.wgPort ? +$scope.server.wgPort : null,
-      }, {
-        timeout: 15000,
-      }).then(success => {
+      $q.all([
+        $http.put('/api/admin/tag', {
+          type: 'server',
+          key: $stateParams.serverId,
+          tags: $scope.tags,
+        }),
+        $http.post('/api/admin/server', {
+          type: $scope.server.type,
+          name: $scope.server.name,
+          address: $scope.server.address,
+          port: +$scope.server.port,
+          password: $scope.server.password,
+          method: $scope.server.method,
+          comment: $scope.server.comment,
+          scale: $scope.server.scale,
+          shift: $scope.server.shift,
+          key: $scope.server.key,
+          net: $scope.server.net,
+          wgPort: $scope.server.wgPort ? +$scope.server.wgPort : null,
+        }, {
+          timeout: 15000,
+        }),
+      ]).then(success => {
         alertDialog.show('添加服务器成功', '确定');
         $state.go('admin.server');
       }).catch(() => {
@@ -501,10 +524,11 @@ app.controller('AdminServerController', ['$scope', '$http', '$state', 'moment', 
     $scope.cancel = () => {
       $state.go('admin.server');
     };
+    $scope.tags = [];
   }
 ])
-.controller('AdminEditServerController', ['$scope', '$state', '$stateParams', '$http', 'confirmDialog', 'alertDialog',
-  ($scope, $state, $stateParams, $http, confirmDialog, alertDialog) => {
+.controller('AdminEditServerController', ['$scope', '$state', '$stateParams', '$http', 'confirmDialog', 'alertDialog', '$q',
+  ($scope, $state, $stateParams, $http, confirmDialog, alertDialog, $q) => {
     $scope.setTitle('编辑服务器');
     const serverId = $stateParams.serverId;
     $scope.setMenuButton('arrow_back', function() {
@@ -536,6 +560,30 @@ app.controller('AdminServerController', ['$scope', '$http', '$state', 'moment', 
       $scope.server.method = $scope.methodSearch;
     };
     $scope.serverInfoloaded = false;
+    $http.get('/api/admin/tag', {
+      params: {
+        type: 'server',
+        key: $stateParams.serverId,
+      }
+    }).then(success => {
+      $scope.tags = success.data;
+    });
+    $scope.tagsAutoComplete = {
+      searchText: '',
+      selectedItem: '',
+      items: [],
+      querySearch: (query) => {
+        if(!query) { return []; }
+        return $scope.tagsAutoComplete.items.filter(f => (f.includes(query) && !$scope.tags.includes(f)));
+      },
+    };
+    $http.get('/api/admin/tag', {
+      params: {
+        type: 'server',
+      }
+    }).then(success => {
+      $scope.tagsAutoComplete.items = success.data;
+    });
     $http.get(`/api/admin/server/${ serverId }`, {
       params: {
         noPort: true,
@@ -558,21 +606,28 @@ app.controller('AdminServerController', ['$scope', '$http', '$state', 'moment', 
     });
     $scope.confirm = () => {
       alertDialog.loading();
-      $http.put('/api/admin/server/' + $stateParams.serverId, {
-        type: $scope.server.type,
-        name: $scope.server.name,
-        address: $scope.server.address,
-        port: +$scope.server.port,
-        password: $scope.server.password,
-        method: $scope.server.method,
-        comment: $scope.server.comment,
-        scale: $scope.server.scale,
-        shift: $scope.server.shift,
-        key: $scope.server.key,
-        net: $scope.server.net,
-        wgPort: $scope.server.wgPort ? +$scope.server.wgPort : null,
-        check: $scope.server.check,
-      }).then(success => {
+      $q.all([
+        $http.put('/api/admin/tag', {
+          type: 'server',
+          key: $stateParams.serverId,
+          tags: $scope.tags,
+        }),
+        $http.put('/api/admin/server/' + $stateParams.serverId, {
+          type: $scope.server.type,
+          name: $scope.server.name,
+          address: $scope.server.address,
+          port: +$scope.server.port,
+          password: $scope.server.password,
+          method: $scope.server.method,
+          comment: $scope.server.comment,
+          scale: $scope.server.scale,
+          shift: $scope.server.shift,
+          key: $scope.server.key,
+          net: $scope.server.net,
+          wgPort: $scope.server.wgPort ? +$scope.server.wgPort : null,
+          check: $scope.server.check,
+        }),
+      ]).then(success => {
         alertDialog.show('修改服务器成功', '确定');
         $state.go('admin.serverPage', { serverId: $stateParams.serverId });
       }).catch(() => {
@@ -593,5 +648,6 @@ app.controller('AdminServerController', ['$scope', '$http', '$state', 'moment', 
         $state.go('admin.server');
       });
     };
+    $scope.tags = [];
   }
 ]);
